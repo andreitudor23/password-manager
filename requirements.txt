@@ -1,1 +1,2 @@
-This is the req text file for this project
+cryptography
+requests
