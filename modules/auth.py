@@ -102,3 +102,23 @@ class AuthManager:
             print("✅ Master password a fost resetat (fișierul auth sters).")
         except Exception as e:
             print(f"⚠️ Eroare la resetarea master password: {e}")
+
+    def has_master(self) -> bool:
+        """Îți spune dacă există deja master password inițializat (auth.json valid)."""
+        return isinstance(self.master_hash, str) and len(self.master_hash) > 0
+
+    def check_password(self, password: str) -> bool:
+        """Verifică o parolă dată față de hash-ul salvat. Nu citește din input, doar compară."""
+        if not self.has_master():
+            return False
+        return self._hash_password(password) == self.master_hash
+
+    def set_new_master(self, password: str):
+        """
+        Setează un master password NOU și îl salvează în data/auth.json.
+        Folosit de GUI la prima rulare (în loc să citească din getpass).
+        """
+        self.master_hash = self._hash_password(password)
+        os.makedirs(os.path.dirname(self.auth_file_path), exist_ok=True)
+        with open(self.auth_file_path, "w") as f:
+            json.dump({"master_hash": self.master_hash}, f, indent=4)
