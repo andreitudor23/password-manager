@@ -208,3 +208,5 @@ __marimo__/
 
 # PyCharm project settings
 .idea/
+
+data/database.db

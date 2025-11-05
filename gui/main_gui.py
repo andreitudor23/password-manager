@@ -75,6 +75,66 @@ class LoginWindow(tk.Toplevel):
             self.password = None
             self.destroy()
 
+class ScrollableToolbar(ttk.Frame):
+    """
+    Toolbar orizontal scrollabil: butoanele se pun în self.inner.
+    Scroll cu bara sau cu Shift + scroll (rotiță/trackpad).
+    """
+    def __init__(self, master, height=44, **kwargs):
+        super().__init__(master, **kwargs)
+        self.canvas = tk.Canvas(self, height=height, highlightthickness=0)
+        self.hbar = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.inner = ttk.Frame(self.canvas)
+
+        self.canvas.configure(xscrollcommand=self.hbar.set)
+        self.canvas.pack(side="top", fill="x", expand=True)
+        self.hbar.pack(side="bottom", fill="x")
+
+        # creează containerul pentru frame-ul interior
+        self.window_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+
+        # menține scrollregion corect
+        self.inner.bind("<Configure>", self._on_inner_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # scroll orizontal cu Shift + rotiță (Win/macOS)
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_wheel)
+        # Linux X11 (buton 4/5 când e ținut Shift)
+        self.canvas.bind_all("<Shift-Button-4>", lambda e: self.canvas.xview_scroll(-3, "units"))
+        self.canvas.bind_all("<Shift-Button-5>", lambda e: self.canvas.xview_scroll( 3, "units"))
+
+        # fallback: dacă utilizatorul ține Shift, tratează orice MouseWheel ca orizontal
+        self.canvas.bind_all("<MouseWheel>", self._maybe_shift_scroll)
+
+    # ---- helpers ----
+    def _on_inner_configure(self, _event):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        # menținem doar înălțimea; lățimea rămâne naturală (poate depăși canvasul)
+        self.canvas.itemconfigure(self.window_id, height=event.height)
+
+    def _on_wheel(self, event):
+        """
+        Scroll orizontal. Pe Windows/macOS event.delta e +/-120, pe macOS poate fi fracționat.
+        """
+        delta = event.delta if hasattr(event, "delta") and event.delta else 0
+        # direcție: rola sus (delta>0) -> scroll stânga
+        step = -3 if delta > 0 else 3
+        self.canvas.xview_scroll(step, "units")
+
+    def _maybe_shift_scroll(self, event):
+        # dacă e apăsat Shift, redirecționează către scroll orizontal
+        # (masca de state pentru Shift e 0x0001 în Tk)
+        if getattr(event, "state", 0) & 0x0001:
+            self._on_wheel(event)
+
+    def add(self, widget, **grid_kwargs):
+        """Adaugă un widget în primul rând, coloana următoare."""
+        col = self.inner.grid_size()[0]
+        widget.grid(row=0, column=col, padx=6, pady=6, **grid_kwargs)
+        self.after(0, lambda: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -96,6 +156,7 @@ class App(tk.Tk):
 
     # ---------- UI -------------------------------------------------
     def create_widgets(self):
+        """
         # Toolbar
         tb = ttk.Frame(self, padding=(8, 6))
         tb.pack(side="top", fill="x")
@@ -122,6 +183,32 @@ class App(tk.Tk):
         ttk.Separator(tb, orient="vertical").pack(side="left", fill="y", padx=10)
         ttk.Button(tb, text="Logout", command=self.logout).pack(side="left")
         ttk.Button(tb, text="Reset App", command=self.reset_app).pack(side="left", padx=6)
+        """
+        # Toolbar scrollabil
+        tb = ScrollableToolbar(self, height=48)
+        tb.pack(side="top", fill="x")
+
+        # Adaugă butoanele exact ca înainte, dar prin tb.add(...)
+        tb.add(ttk.Button(tb.inner, text="Adaugă", command=self.add_entry))
+        tb.add(ttk.Button(tb.inner, text="Afișează/Copy", command=self.show_selected))
+        tb.add(ttk.Button(tb.inner, text="Reveal 10s", command=self.reveal_selected))
+        tb.add(ttk.Button(tb.inner, text="Actualizează", command=self.update_selected))
+        tb.add(ttk.Button(tb.inner, text="Șterge", command=self.delete_selected))
+
+        # separator vizual (poți folosi și un label „|” mic)
+        tb.add(ttk.Separator(tb.inner, orient="vertical"))
+
+        # căutare
+        tb.add(ttk.Label(tb.inner, text="Caută:"))
+        self.search_var = tk.StringVar()
+        tb.add(ttk.Entry(tb.inner, textvariable=self.search_var, width=24))
+        tb.add(ttk.Button(tb.inner, text="Go", command=self.search))
+        tb.add(ttk.Button(tb.inner, text="Reset", command=self.refresh))
+
+        tb.add(ttk.Separator(tb.inner, orient="vertical"))
+        tb.add(ttk.Button(tb.inner, text="Check HIBP", command=self.check_selected))
+        tb.add(ttk.Button(tb.inner, text="Logout", command=self.logout))
+        tb.add(ttk.Button(tb.inner, text="Reset App", command=self.reset_app))
 
         # Tree
         self.tree = ttk.Treeview(self, columns=("service", "username", "updated"), show="headings", height=16)
@@ -254,31 +341,67 @@ class App(tk.Tk):
             self.secure_copy(pwd, seconds=15)
 
     def reveal_selected(self):
-        """Afișează parola în clar într-un dialog care se închide automat după 10s."""
-        if self.enc is None: return
+        """Afișează parola în clar într-o fereastră care se închide automat după 10s."""
+        if self.enc is None:
+            return
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showinfo("Info", "Selectează o intrare.")
             return
+
         e = self.db.get_entry_by_id(entry_id)
         if not e:
-            self.refresh(); return
+            self.refresh()
+            return
+
         try:
             pwd = self.enc.decrypt(e.password_encrypted)
         except Exception as ex:
-            messagebox.showerror("Eroare", str(ex)); return
+            messagebox.showerror("Eroare", f"Nu pot decripta parola.\n{ex}")
+            return
 
         top = tk.Toplevel(self)
         top.title("Reveal (10s)")
         top.resizable(False, False)
-        ttk.Label(top, text=f"{e.service} — {e.username}", font=("TkDefaultFont", 10, "bold")).pack(padx=12, pady=(12,4))
-        lbl = ttk.Label(top, text=pwd)
-        lbl.pack(padx=12, pady=(0,8))
-        ttk.Button(top, text="Copy", command=lambda: self.secure_copy(pwd)).pack(pady=(0,10))
         top.attributes("-topmost", True)
-        # auto-close în 10s
-        top.after(10_000, lambda: top.destroy() if top.winfo_exists() else None)
 
+        container = ttk.Frame(top, padding=12)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text=f"{e.service} — {e.username}",
+                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 8))
+
+        # afișează parola în clar (monospace ca să fie lizibilă)
+        show_lbl = ttk.Label(container, text=pwd, font=("Courier New", 12))
+        show_lbl.pack(anchor="w", pady=(0, 8))
+
+        # Copy + countdown
+        btn_row = ttk.Frame(container)
+        btn_row.pack(fill="x")
+
+        def do_copy():
+            self.secure_copy(pwd, seconds=15)
+
+        copy_btn = ttk.Button(btn_row, text="Copy", command=do_copy)
+        copy_btn.pack(side="left")
+
+        countdown_lbl = ttk.Label(btn_row, text="Se închide în 10s")
+        countdown_lbl.pack(side="right")
+
+        # countdown + auto close la 10s
+        seconds = 10
+
+        def tick():
+            nonlocal seconds
+            seconds -= 1
+            if seconds <= 0:
+                if top.winfo_exists():
+                    top.destroy()
+                return
+            countdown_lbl.config(text=f"Se închide în {seconds}s")
+            top.after(1000, tick)
+
+        top.after(1000, tick)
 
     def update_selected(self):
         if self.enc is None:
