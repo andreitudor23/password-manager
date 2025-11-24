@@ -209,4 +209,14 @@ __marimo__/
 # PyCharm project settings
 .idea/
 
+
+# --- Fisiere locale, NU se urca pe GitHub ---
 data/database.db
+data/auth.json
+#data/face_encoding.json
+data/face_model/
+*.yml
+
+# cache / chestii temporare
+__pycache__/
+*.pyc
