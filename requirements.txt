@@ -2,3 +2,5 @@ cryptography
 requests
 pwinput
 customtkinter
+opencv-contrib-python
+numpy

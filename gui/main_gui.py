@@ -4,8 +4,10 @@ import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from modules.api_check import pwned_count
+import threading
+from modules.face_auth import FaceAuthManager
 
-# permite importuri din proiect când rulezi ca script
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from modules.auth import AuthManager
@@ -146,6 +148,7 @@ class App(tk.Tk):
         # back-end
         self.auth = AuthManager()        # data/auth.json
         self.db = DatabaseManager()      # data/database.db
+        self.face_auth = FaceAuthManager()
         self.enc: EncryptionManager | None = None
 
         # UI: toolbar + search + tree + buttons
@@ -154,7 +157,31 @@ class App(tk.Tk):
         # login flow
         self.after(50, self.authenticate)
 
+    # ---------- HIBP helpers ----------
+    def _hibp_label(self, count: int | None) -> str:
+        """Etichetă frumoasă pentru coloana HIBP."""
+        if count is None:
+            return "—"
+        if count == 0:
+            return "🟢 OK"
+        if count <= 100:
+            return f"🟠 {count}"
+        return f"🔴 {count}"
+
+    def _update_hibp_cell(self, entry_id: int, count: int | None):
+        """Actualizează doar coloana HIBP pentru rândul cu id-ul dat."""
+        iid = str(entry_id)
+        if iid not in self.tree.get_children():
+            return
+        vals = list(self.tree.item(iid, "values"))
+        # ne asigurăm că avem 4 coloane
+        while len(vals) < 4:
+            vals.append("—")
+        vals[3] = self._hibp_label(count)
+        self.tree.item(iid, values=tuple(vals))
+
     # ---------- UI -------------------------------------------------
+
     def create_widgets(self):
         """
         # Toolbar
@@ -192,8 +219,10 @@ class App(tk.Tk):
         tb.add(ttk.Button(tb.inner, text="Adaugă", command=self.add_entry))
         tb.add(ttk.Button(tb.inner, text="Afișează/Copy", command=self.show_selected))
         tb.add(ttk.Button(tb.inner, text="Reveal 10s", command=self.reveal_selected))
+        tb.add(ttk.Button(tb.inner, text="Seteaza FaceID", command=self.setup_face_auth))
         tb.add(ttk.Button(tb.inner, text="Actualizează", command=self.update_selected))
         tb.add(ttk.Button(tb.inner, text="Șterge", command=self.delete_selected))
+        tb.add(ttk.Button(tb.inner, text="Audit HIBP", command=self.audit_hibp_all))
 
         # separator vizual (poți folosi și un label „|” mic)
         tb.add(ttk.Separator(tb.inner, orient="vertical"))
@@ -210,7 +239,9 @@ class App(tk.Tk):
         tb.add(ttk.Button(tb.inner, text="Logout", command=self.logout))
         tb.add(ttk.Button(tb.inner, text="Reset App", command=self.reset_app))
 
+
         # Tree
+        """
         self.tree = ttk.Treeview(self, columns=("service", "username", "updated"), show="headings", height=16)
         self.tree.heading("service", text="Service")
         self.tree.heading("username", text="Username")
@@ -219,11 +250,30 @@ class App(tk.Tk):
         self.tree.column("username", width=240)
         self.tree.column("updated", width=180)
         self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        """
+        # === TABEL INTRĂRI ===
+        self.tree = ttk.Treeview(
+            self,
+            columns=("service", "username", "updated", "hibp"),
+            show="headings",
+            height=16
+        )
+
+        self.tree.heading("service", text="Service")
+        self.tree.heading("username", text="Username")
+        self.tree.heading("updated", text="Last updated")
+        self.tree.heading("hibp", text="HIBP")
+
+        self.tree.column("service", width=260, anchor="w")
+        self.tree.column("username", width=260, anchor="w")
+        self.tree.column("updated", width=160, anchor="center")
+        self.tree.column("hibp", width=90, anchor="center")
+
+        self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.tree.bind("<Double-1>", lambda e: self.show_selected())
 
         self.status = ttk.Label(self, text="—", anchor="w")
         self.status.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
-
-        self.tree.bind("<Double-1>", lambda e: self.show_selected())
 
     # ---------- Auth -----------------------------------------------
     def authenticate(self):
@@ -232,7 +282,23 @@ class App(tk.Tk):
         if not dlg.password:
             self.destroy()
             return
+
+        # setăm cheia de criptare (master password verificat deja in LoginWindow)
         self.enc = EncryptionManager(dlg.password)
+
+        # daca exista template facial, facem si verificarea faciala
+        if self.face_auth.is_enrolled():
+            from tkinter import messagebox
+            ok = self.face_auth.verify()
+            if not ok:
+                messagebox.showerror(
+                    "Autentificare esuata",
+                    "Verificarea faciala nu a reusit.\nAplicatia va fi inchisa."
+                )
+                self.enc = None
+                self.destroy()
+                return
+
         self.refresh()
 
     def logout(self):
@@ -243,23 +309,115 @@ class App(tk.Tk):
             self.after(100, self.authenticate)
 
     # ---------- Helpers --------------------------------------------
+    def setup_face_auth(self):
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+                "Setare FaceID",
+                "Aceasta va porni camera si va salva un model al fetei tale pe disk.\n"
+                "Vrei sa continui?"
+        ):
+            return
+
+        ok = self.face_auth.enroll()
+        if ok:
+            messagebox.showinfo("Setare FaceID", "Enrolarea faciala a reusit.")
+        else:
+            messagebox.showwarning(
+                "Setare FaceID",
+                "Enrolarea faciala NU a reusit sau a fost anulata."
+            )
+
+    def audit_hibp_all(self):
+        """Calculează HIBP pentru toate intrările, în background, cu update live."""
+        if self.enc is None:
+            return
+
+        rows = self.db.get_all_entries()
+        if not rows:
+            messagebox.showinfo("HIBP", "Nu există intrări.")
+            return
+
+        if not hasattr(self, "_hibp_cache"):
+            self._hibp_cache: dict[int, int | None] = {}
+
+        if hasattr(self, "status"):
+            self.status.config(text="Audit HIBP în curs…")
+
+        def worker():
+            for e in rows:
+                # IMPORTANT: inițializăm count la None la fiecare iterație,
+                # deci există mereu, indiferent de excepții.
+                count: int | None = None
+
+                # 1) decriptează
+                try:
+                    pwd = self.enc.decrypt(e.password_encrypted)
+                except Exception:
+                    # dacă nu putem decripta, lăsăm count = None (status „—”)
+                    pass
+                else:
+                    # 2) verifică HIBP
+                    try:
+                        count = pwned_count(pwd)
+                    except Exception:
+                        # dacă pică rețeaua / API-ul, lăsăm None
+                        count = None
+
+                # 3) salvăm în cache + actualizăm UI pentru rândul curent
+                self._hibp_cache[e.id] = count
+                self.after(0, lambda _id=e.id, _c=count: self._update_hibp_cell(_id, _c))
+
+            # 4) la final, mesaj în status bar
+            if hasattr(self, "status"):
+                self.after(0, lambda: self.status.config(text="Audit HIBP terminat."))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def refresh(self):
+        """Reîncarcă toate intrările din baza de date în tabel."""
+        if not hasattr(self, "_hibp_cache"):
+            self._hibp_cache: dict[int, int | None] = {}
+
         self.tree.delete(*self.tree.get_children())
         rows = self.db.get_all_entries()
+
         for e in rows:
-            self.tree.insert("", "end", iid=str(e.id), values=(e.service, e.username, e.last_updated))
+            hibp_val = self._hibp_label(self._hibp_cache.get(e.id))
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(e.id),
+                values=(e.service, e.username, e.last_updated, hibp_val),
+            )
+
         self.status.config(text=f"{len(rows)} intrări")
 
     def search(self):
+        """Caută după text în service și afișează rezultatele."""
         q = self.search_var.get().strip()
-        if not q:
-            self.refresh()
-            return
+        if not hasattr(self, "_hibp_cache"):
+            self._hibp_cache: dict[int, int | None] = {}
+
         self.tree.delete(*self.tree.get_children())
-        rows = self.db.find_by_service(q)
+
+        if not q:
+            rows = self.db.get_all_entries()
+        else:
+            rows = self.db.find_by_service(q)
+
         for e in rows:
-            self.tree.insert("", "end", iid=str(e.id), values=(e.service, e.username, e.last_updated))
-        self.status.config(text=f"{len(rows)} rezultate pentru '{q}'")
+            hibp_val = self._hibp_label(self._hibp_cache.get(e.id))
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(e.id),
+                values=(e.service, e.username, e.last_updated, hibp_val),
+            )
+
+        if q:
+            self.status.config(text=f"{len(rows)} rezultate pentru '{q}'")
+        else:
+            self.status.config(text=f"{len(rows)} intrări")
 
     def get_selected_id(self) -> int | None:
         sel = self.tree.selection()
@@ -306,6 +464,17 @@ class App(tk.Tk):
         enc_pw = self.enc.encrypt(pw1)
         entry = PasswordEntry(service, username, enc_pw, notes)
         new_id = self.db.add_entry(entry)
+
+        def _one_check(eid=new_id, plain=pw1):
+            try:
+                cnt = pwned_count(plain)
+            except Exception:
+                cnt = None
+            self._hibp_cache[eid] = cnt
+            self.after(0, lambda: self._update_hibp_cell(eid, cnt))
+
+        threading.Thread(target=_one_check, daemon=True).start()
+
         self.refresh()
         messagebox.showinfo("Succes", f"Intrare creată cu ID {new_id}")
 
@@ -448,7 +617,8 @@ class App(tk.Tk):
         except Exception as ex:
             messagebox.showwarning("HIBP", f"Nu am putut verifica: {ex}")
             return
-
+        self._hibp_cache[e.id] = cnt
+        self._update_hibp_cell(e.id, cnt)
         if cnt > 0:
             messagebox.showwarning("HIBP",
                 f"⚠️ Parola acestui cont apare în breșe de {cnt} ori.\n"

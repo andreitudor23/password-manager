@@ -6,6 +6,7 @@ from modules.password_entry import PasswordEntry
 from modules.api_check import pwned_count
 from modules.password_utils import generate_password, strength_score
 
+
 def show_menu():
     print("\n=== PASSWORD MANAGER ===")
     print("1. Adaugă parolă")
