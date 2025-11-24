@@ -46,6 +46,7 @@ class FaceAuthManager:
         Pornește camera, ia câteva imagini cu fața ta și antrenează un model LBPH.
         ESC = anulează, SPACE = forțează captură.
         """
+        #CAM_INDEX = 2
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             print("[FaceAuth] Camera nu poate fi deschisă.")
