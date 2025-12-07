@@ -213,7 +213,6 @@ __marimo__/
 # --- Fisiere locale, NU se urca pe GitHub ---
 data/database.db
 data/auth.json
-#data/face_encoding.json
 data/face_model/
 *.yml
 

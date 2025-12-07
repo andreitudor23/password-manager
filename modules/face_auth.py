@@ -47,7 +47,7 @@ class FaceAuthManager:
         ESC = anulează, SPACE = forțează captură.
         """
         #CAM_INDEX = 2
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(1)
         if not cap.isOpened():
             print("[FaceAuth] Camera nu poate fi deschisă.")
             return False
@@ -123,7 +123,7 @@ class FaceAuthManager:
             print("[FaceAuth] Nu există model facial salvat.")
             return False
 
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(1)
         if not cap.isOpened():
             print("[FaceAuth] Camera nu poate fi deschisă.")
             return False

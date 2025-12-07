@@ -1,18 +1,20 @@
 from datetime import datetime
 from typing import Optional
 
+
 class PasswordEntry:
     """
-    Aceasta clasa reprezinta o intrare a unei parole in baza de date
+    Aceasta clasa reprezinta o intrare a unei parole in baza de date.
     """
+
     def __init__(
         self,
-        service: str, # Serviciul pentru care este parola
-        username: str, # user/ email cu care te loghezi
-        password_encrypted: str, # parola deja criptata
-        notes: str = "", # comentarii extra
-        entry_id: Optional[int] = None, # id-ul din baza de date (este None daca nu a fost salvata anterior)
-        last_updated: Optional[str] = None # ultima data cand a fost updatata parola
+        service: str,              # Serviciul pentru care este parola
+        username: str,             # user / email cu care te loghezi
+        password_encrypted: str,   # parola deja criptata
+        notes: str = "",           # comentarii extra
+        entry_id: Optional[int] = None,      # id-ul din baza de date (None daca nu a fost salvata anterior)
+        last_updated: Optional[str] = None,  # ultima data cand a fost updatata parola
     ):
         self.id = entry_id
         self.service = service
@@ -23,8 +25,8 @@ class PasswordEntry:
 
     def to_tuple_db(self):
         """
-        Returneaza datele intr-un format care este usor de introdus in baza de date SQLite
-        Self.id ul este autoincrementat de la SQL
+        Returneaza datele intr-un format care este usor de introdus in baza de date SQLite.
+        Self.id-ul este autoincrementat de la SQL.
         """
         return (
             self.service,
@@ -37,7 +39,7 @@ class PasswordEntry:
     @staticmethod
     def from_db_row(row: tuple) -> "PasswordEntry":
         """
-        Creeaza un obiect PasswordEntry pornind de la un rand scos din Database
+        Creeaza un obiect PasswordEntry pornind de la un rand scos din Database.
         """
         return PasswordEntry(
             entry_id=row[0],
@@ -50,10 +52,10 @@ class PasswordEntry:
 
     def __str__(self):
         """
-        Modul in care se afiseaza intrarea antunci cand facem un print
-        Parola nu va fi afisata in clar si nici intreg criptata
+        Modul in care se afiseaza intrarea atunci cand facem un print.
+        Parola nu va fi afisata in clar si nici intreaga forma criptata.
         """
-        preview = self.password_encrypted[:10] + "..." #afisam doar primele 10 caractere
+        preview = self.password_encrypted[:10] + "..."  # afisam doar primele 10 caractere
 
         return (
             f"[ID: {self.id}] {self.service}\n"
