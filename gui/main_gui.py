@@ -23,7 +23,7 @@ class LoginWindow(tk.Toplevel):
     """
     def __init__(self, parent, auth: AuthManager):
         super().__init__(parent)
-        self.title("Autentificare")
+        self.title("Autentificare master")
         self.resizable(False, False)
         self.auth = auth
         self.password = None
@@ -48,7 +48,7 @@ class LoginWindow(tk.Toplevel):
             ttk.Button(frm, text="Setează", command=self.on_setup).grid(row=3, column=0, sticky="ew")
 
         frm.columnconfigure(0, weight=1)
-        self.grab_set()  # modal
+        self.grab_set()
         self.e1.focus_set()
 
     def on_login(self):
@@ -77,77 +77,6 @@ class LoginWindow(tk.Toplevel):
             self.password = None
             self.destroy()
 
-class UserChoiceWindow(tk.Toplevel):
-    """
-    Fereastră care îți arată utilizatorii existenți și îți permite să alegi
-    ca cine vrei să lucrezi (master sau un user normal).
-    NU verifică parole aici, doar alege identitatea.
-    """
-    def __init__(self, parent, db: DatabaseManager):
-        super().__init__(parent)
-        self.title("Alege utilizator")
-        self.resizable(False, False)
-
-        self.db = db
-        self.selected_user: User | None = None
-        self.cancelled = False
-
-        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
-
-        frm = ttk.Frame(self, padding=12)
-        frm.grid(row=0, column=0, sticky="nsew")
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-
-        ttk.Label(frm, text="Alege cu ce utilizator vrei să deschizi aplicația:").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
-        )
-
-        # listă de useri
-        self.listbox = tk.Listbox(frm, height=6)
-        self.listbox.grid(row=1, column=0, columnspan=2, sticky="nsew")
-
-        # primul element: master
-        self.listbox.insert(tk.END, "Master (admin)")
-        self.users = self.db.get_all_users()  # list[User]
-
-        for u in self.users:
-            self.listbox.insert(tk.END, f"{u.username} ({u.role})")
-
-        self.listbox.selection_set(0)
-        self.listbox.bind("<Double-1>", lambda e: self.on_ok())
-
-        btn_frame = ttk.Frame(frm)
-        btn_frame.grid(row=2, column=0, columnspan=2, pady=(8, 0), sticky="e")
-
-        ttk.Button(btn_frame, text="Anulează", command=self.on_cancel).pack(side="right", padx=(4, 0))
-        ttk.Button(btn_frame, text="Continuă", command=self.on_ok).pack(side="right")
-
-        frm.rowconfigure(1, weight=1)
-        frm.columnconfigure(0, weight=1)
-
-        self.grab_set()
-        self.listbox.focus_set()
-
-    def on_ok(self):
-        sel = self.listbox.curselection()
-        if not sel:
-            self.selected_user = None
-        else:
-            idx = sel[0]
-            if idx == 0:
-                # Master
-                self.selected_user = None
-            else:
-                # users[idx-1] (pentru că 0 e Master)
-                self.selected_user = self.users[idx - 1]
-        self.destroy()
-
-    def on_cancel(self):
-        # dacă anulezi, considerăm că vrei să închizi aplicația
-        self.cancelled = True
-        self.selected_user = None
-        self.destroy()
 
 class ScrollableToolbar(ttk.Frame):
     """
@@ -164,51 +93,146 @@ class ScrollableToolbar(ttk.Frame):
         self.canvas.pack(side="top", fill="x", expand=True)
         self.hbar.pack(side="bottom", fill="x")
 
-        # creează containerul pentru frame-ul interior
         self.window_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
 
-        # menține scrollregion corect
         self.inner.bind("<Configure>", self._on_inner_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # scroll orizontal cu Shift + rotiță (Win/macOS)
         self.canvas.bind_all("<Shift-MouseWheel>", self._on_wheel)
-        # Linux X11 (buton 4/5 când e ținut Shift)
         self.canvas.bind_all("<Shift-Button-4>", lambda e: self.canvas.xview_scroll(-3, "units"))
         self.canvas.bind_all("<Shift-Button-5>", lambda e: self.canvas.xview_scroll(3, "units"))
-
-        # fallback: dacă utilizatorul ține Shift, tratează orice MouseWheel ca orizontal
         self.canvas.bind_all("<MouseWheel>", self._maybe_shift_scroll)
 
-    # ---- helpers ----
     def _on_inner_configure(self, _event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
-        # menținem doar înălțimea; lățimea rămâne naturală (poate depăși canvasul)
         self.canvas.itemconfigure(self.window_id, height=event.height)
 
     def _on_wheel(self, event):
-        """
-        Scroll orizontal. Pe Windows/macOS event.delta e +/-120, pe macOS poate fi fracționat.
-        """
         delta = event.delta if hasattr(event, "delta") and event.delta else 0
-        # direcție: rola sus (delta>0) -> scroll stânga
         step = -3 if delta > 0 else 3
         self.canvas.xview_scroll(step, "units")
 
     def _maybe_shift_scroll(self, event):
-        # dacă e apăsat Shift, redirecționează către scroll orizontal
-        # (masca de state pentru Shift e 0x0001 în Tk)
         if getattr(event, "state", 0) & 0x0001:
             self._on_wheel(event)
 
     def add(self, widget, **grid_kwargs):
-        """Adaugă un widget în primul rând, coloana următoare."""
         col = self.inner.grid_size()[0]
         widget.grid(row=0, column=col, padx=6, pady=6, **grid_kwargs)
         self.after(0, lambda: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
+class UsersOverviewWindow(tk.Toplevel):
+    """
+    Fereastră pentru master: listează userii și parolele lor.
+    """
+    def __init__(self, parent: "App"):
+        super().__init__(parent)
+        self.parent = parent
+        self.db: DatabaseManager = parent.db
+
+        self.title("Useri & parole")
+        self.geometry("900x500")
+        self.minsize(800, 400)
+
+        main = ttk.Frame(self, padding=10)
+        main.pack(fill="both", expand=True)
+
+        # stânga: lista de useri
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="y")
+
+        ttk.Label(left, text="Useri:", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 4))
+
+        self.users_listbox = tk.Listbox(left, height=12)
+        self.users_listbox.pack(fill="y", expand=False)
+
+        self.users = self.db.get_all_users()
+        for u in self.users:
+            self.users_listbox.insert(tk.END, f"{u.username} ({u.role})")
+
+        self.users_listbox.bind("<<ListboxSelect>>", self.on_user_selected)
+
+        # dreapta: parolele userului selectat
+        right = ttk.Frame(main)
+        right.pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+        ttk.Label(right, text="Parolele utilizatorului selectat:",
+                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 4))
+
+        self.tree = ttk.Treeview(
+            right,
+            columns=("service", "account", "password", "updated"),
+            show="headings",
+            height=14
+        )
+        self.tree.heading("service", text="Service")
+        self.tree.heading("account", text="Account username")
+        self.tree.heading("password", text="Parolă (decriptată)")
+        self.tree.heading("updated", text="Last updated")
+
+        self.tree.column("service", width=200, anchor="w")
+        self.tree.column("account", width=200, anchor="w")
+        self.tree.column("password", width=220, anchor="w")
+        self.tree.column("updated", width=140, anchor="center")
+
+        self.tree.pack(fill="both", expand=True)
+
+        # hint jos
+        ttk.Label(
+            right,
+            text="⏵ Dublu click pe o parolă pentru a o copia în clipboard.",
+            foreground="#555"
+        ).pack(anchor="w", pady=(4, 0))
+
+        self.tree.bind("<Double-1>", self.on_double_click_entry)
+
+        self.grab_set()
+        self.users_listbox.focus_set()
+
+    def on_user_selected(self, _event=None):
+        sel = self.users_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        user = self.users[idx]
+
+        # luăm toate parolele acelui user
+        entries = self.db.get_entries_for_user(user.id)
+
+        # curățăm tabelul
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        # pentru fiecare intrare, decriptăm cu logica deja existentă în App
+        for e in entries:
+            pwd = self.parent._decrypt_entry_password(e)
+            if pwd is None:
+                pwd_text = "<nu pot decripta>"
+            else:
+                pwd_text = pwd
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(e.id),
+                values=(e.service, e.username, pwd_text, e.last_updated)
+            )
+
+    def on_double_click_entry(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        item = self.tree.item(iid)
+        vals = item.get("values", [])
+        if len(vals) < 3:
+            return
+        pwd = vals[2]
+        if not pwd or pwd.startswith("<nu pot"):
+            return
+        # copiem parola în clipboard-ul principal al aplicației părinte
+        self.parent.secure_copy(pwd, seconds=15)
 
 class App(tk.Tk):
     def __init__(self):
@@ -218,15 +242,19 @@ class App(tk.Tk):
         self.minsize(780, 480)
 
         # back-end
-        self.auth = AuthManager()        # data/auth.json
-        self.db = DatabaseManager()      # data/database.db
+        self.auth = AuthManager()
+        self.db = DatabaseManager()
         self.face_auth = FaceAuthManager()
-        self.enc: EncryptionManager | None = None
 
-        # user curent (None = master / vede tot)
+        # crypto state
+        self.master_key: bytes | None = None          # cheia Fernet derivată din master
+        self.user_enc: EncryptionManager | None = None  # EncryptionManager cu DEK_user
+        self.mode: str | None = None                  # "master" sau "user"
+
+        # user curent (None = master)
         self.current_user: User | None = None
 
-        # vom păstra referințe la anumite butoane ca să le putem activa/dezactiva
+        # referințe la butoane
         self._btn_set_face = None
         self._btn_update = None
         self._btn_delete = None
@@ -234,8 +262,9 @@ class App(tk.Tk):
         self._btn_reset_app = None
         self._btn_user_login = None
         self._btn_new_user = None
+        self._btn_new_user = None
+        self._btn_users_overview = None
 
-        # UI: toolbar + search + tree + status
         self.create_widgets()
 
         # login flow
@@ -243,7 +272,6 @@ class App(tk.Tk):
 
     # ---------- HIBP helpers ----------
     def _hibp_label(self, count: int | None) -> str:
-        """Etichetă frumoasă pentru coloana HIBP."""
         if count is None:
             return "—"
         if count == 0:
@@ -253,12 +281,10 @@ class App(tk.Tk):
         return f"🔴 {count}"
 
     def _update_hibp_cell(self, entry_id: int, count: int | None):
-        """Actualizează doar coloana HIBP pentru rândul cu id-ul dat."""
         iid = str(entry_id)
         if iid not in self.tree.get_children():
             return
         vals = list(self.tree.item(iid, "values"))
-        # ne asigurăm că avem 4 coloane
         while len(vals) < 4:
             vals.append("—")
         vals[3] = self._hibp_label(count)
@@ -267,11 +293,9 @@ class App(tk.Tk):
     # ---------- UI -------------------------------------------------
 
     def create_widgets(self):
-        # Toolbar scrollabil
         tb = ScrollableToolbar(self, height=48)
         tb.pack(side="top", fill="x")
 
-        # butoane principale
         btn_add = ttk.Button(tb.inner, text="Adaugă", command=self.add_entry)
         tb.add(btn_add)
 
@@ -281,7 +305,7 @@ class App(tk.Tk):
         btn_reveal = ttk.Button(tb.inner, text="Reveal 10s", command=self.reveal_selected)
         tb.add(btn_reveal)
 
-        self._btn_set_face = ttk.Button(tb.inner, text="Seteaza FaceID", command=self.setup_face_auth)
+        self._btn_set_face = ttk.Button(tb.inner, text="Setează FaceID (master)", command=self.setup_face_auth)
         tb.add(self._btn_set_face)
 
         self._btn_update = ttk.Button(tb.inner, text="Actualizează", command=self.update_selected)
@@ -293,35 +317,32 @@ class App(tk.Tk):
         self._btn_audit = ttk.Button(tb.inner, text="Audit HIBP", command=self.audit_hibp_all)
         tb.add(self._btn_audit)
 
-        # separator vizual
         tb.add(ttk.Separator(tb.inner, orient="vertical"))
 
-        # căutare
         tb.add(ttk.Label(tb.inner, text="Caută:"))
         self.search_var = tk.StringVar()
         tb.add(ttk.Entry(tb.inner, textvariable=self.search_var, width=24))
         tb.add(ttk.Button(tb.inner, text="Go", command=self.search))
         tb.add(ttk.Button(tb.inner, text="Reset", command=self.refresh))
 
-        # separator + acțiuni diverse
         tb.add(ttk.Separator(tb.inner, orient="vertical"))
         tb.add(ttk.Button(tb.inner, text="Check HIBP", command=self.check_selected))
-        tb.add(ttk.Button(tb.inner, text="Logout master", command=self.logout))
+        tb.add(ttk.Button(tb.inner, text="Logout", command=self.logout))
 
         self._btn_reset_app = ttk.Button(tb.inner, text="Reset App", command=self.reset_app)
         tb.add(self._btn_reset_app)
 
-        # separator pentru zona de useri
         tb.add(ttk.Separator(tb.inner, orient="vertical"))
 
-        # butoane user: login + creare user nou (doar pentru master)
         self._btn_user_login = ttk.Button(tb.inner, text="Login user", command=self.user_login_dialog)
         tb.add(self._btn_user_login)
 
-        self._btn_new_user = ttk.Button(tb.inner, text="Adauga user", command=self.create_user_dialog)
+        self._btn_new_user = ttk.Button(tb.inner, text="Adaugă user", command=self.create_user_dialog)
         tb.add(self._btn_new_user)
 
-        # === TABEL INTRĂRI ===
+        self._btn_users_overview = ttk.Button(tb.inner, text="Useri & parole", command=self.show_users_overview)
+        tb.add(self._btn_users_overview)
+
         self.tree = ttk.Treeview(
             self,
             columns=("service", "username", "updated", "hibp"),
@@ -346,136 +367,180 @@ class App(tk.Tk):
         self.status.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
 
     # ---------- Auth -----------------------------------------------
+
     def authenticate(self):
         """
-        1. Dacă există useri în DB, deschide fereastra de alegere utilizator.
-        2. Cere master password (ca să poată decripta baza).
-        3. Dacă s-a ales un user normal, setăm current_user = acel user,
-           altfel rămânem în modul master.
+        La pornire întrebăm: master sau user?
+        - master -> parola master + (FaceID dacă e enrolled)
+        - user   -> username + parola userului (fără master, fără FaceID)
         """
-        # 1) alegem utilizatorul (dacă există useri)
-        chosen_user: User | None = None
-        has_users = bool(self.db.get_all_users())
-        if has_users:
-            udlg = UserChoiceWindow(self, self.db)
-            self.wait_window(udlg)
-            if udlg.cancelled:
+        answer = messagebox.askyesno(
+            "Mod autentificare",
+            "Vrei să te loghezi ca MASTER?\n"
+            "Da = autentificare master\nNu = autentificare ca user normal"
+        )
+        if answer:
+            ok = self._master_login_flow()
+            if not ok:
                 self.destroy()
-                return
-            chosen_user = udlg.selected_user
         else:
-            # nu avem useri încă -> master implicit
-            chosen_user = None
+            ok = self._user_login_flow(startup=True)
+            if not ok:
+                self.destroy()
 
-        # 2) dialog de master password (ca până acum)
+    def _master_login_flow(self) -> bool:
         dlg = LoginWindow(self, self.auth)
         self.wait_window(dlg)
         if not dlg.password:
-            self.destroy()
-            return
+            return False
 
-        # setăm cheia de criptare (master password verificat deja in LoginWindow)
-        self.enc = EncryptionManager(dlg.password)
+        # derivăm cheia master
+        master_enc = EncryptionManager(master_password=dlg.password)
+        self.master_key = master_enc.key
 
-        # daca exista template facial, facem si verificarea faciala
+        # verificare facială (doar pentru master)
         if self.face_auth.is_enrolled():
-            ok = self.face_auth.verify()
-            if not ok:
+            ok_face = self.face_auth.verify()
+            if not ok_face:
                 messagebox.showerror(
-                    "Autentificare esuata",
-                    "Verificarea faciala nu a reusit.\nAplicatia va fi inchisa."
+                    "Autentificare eșuată",
+                    "Verificarea facială nu a reușit.\nAplicația va fi închisă."
                 )
-                self.enc = None
-                self.destroy()
-                return
+                self.master_key = None
+                return False
 
-        # 3) dacă userul ales este None => master; altfel user normal
-        self.current_user = chosen_user
+        self.mode = "master"
+        self.current_user = None
+        self.user_enc = None
+
+        self.update_ui_for_role()
+        self.refresh()
+        return True
+
+    def _user_login_flow(self, startup: bool = False) -> bool:
+        """
+        Login doar cu username + parola userului.
+        Fără master password, fără FaceID.
+        """
+        username = simpledialog.askstring("Login user", "Username:", parent=self)
+        if not username:
+            if startup:
+                return False
+            return False
+
+        password = simpledialog.askstring("Login user", "Parolă:", show="*", parent=self)
+        if password is None:
+            if startup:
+                return False
+            return False
+
+        user = self.db.verify_user_credentials(username, password)
+        if not user:
+            messagebox.showerror("Eroare", "Credentiale user incorecte.")
+            return False
+
+        dek = self.db.get_user_dek_via_user_password(user, password)
+        if not dek:
+            messagebox.showerror(
+                "Eroare cheie",
+                "Acest utilizator nu are o cheie de criptare configurată.\n"
+                "Cel mai probabil a fost creat înainte de noul sistem.\n"
+                "Creează userul din nou din modul master."
+            )
+            return False
+
+        self.user_enc = EncryptionManager(raw_key=dek)
+        self.mode = "user"
+        self.current_user = user
+        self.master_key = None
+
         self.update_ui_for_role()
         self.refresh()
 
-    def logout(self):
-        if messagebox.askyesno("Logout", "Sigur vrei să te deloghezi?"):
-            self.enc = None
-            self.current_user = None
-            self.tree.delete(*self.tree.get_children())
-            self.status.config(text="Delogat.")
-            self.after(100, self.authenticate)
+        if not startup:
+            messagebox.showinfo("Login user", f"Logat ca {user.username} ({user.role}).")
+        return True
 
-    # ---------- Helpers --------------------------------------------
+    def logout(self):
+        if not messagebox.askyesno("Logout", "Sigur vrei să te deloghezi?"):
+            return
+        self.master_key = None
+        self.user_enc = None
+        self.mode = None
+        self.current_user = None
+        self.tree.delete(*self.tree.get_children())
+        self.status.config(text="Delogat.")
+        self.after(100, self.authenticate)
+
+    # ---------- Helpers UI / role ----------------------------------
 
     def update_ui_for_role(self):
         """
-        Activează/dezactivează butoane în funcție de rol:
-        - master (current_user is None) -> totul activ
-        - user normal -> fără reset, fără FaceID, fără audit global, fără creare useri
+        Master vs user:
+        - master:
+            * poate vedea toate parolele
+            * poate crea useri noi
+            * poate face reset & audit & FaceID
+            * nu adaugă/actualizează parole pentru useri (doar userii înșiși)
+        - user:
+            * poate vedea/adăuga/actualiza/șterge DOAR parolele lui
+            * nu poate crea useri, nu poate reseta aplicația, nu poate FaceID
         """
-        if self.current_user is None:
-            title = "Password Manager 🔐 — master"
+        if self.mode == "master":
+            title = "Password Manager 🔐 — MASTER"
             if self._btn_set_face:   self._btn_set_face["state"] = "normal"
-            if self._btn_update:     self._btn_update["state"] = "normal"
+            if self._btn_update:     self._btn_update["state"] = "disabled"
             if self._btn_delete:     self._btn_delete["state"] = "normal"
             if self._btn_audit:      self._btn_audit["state"] = "normal"
             if self._btn_reset_app:  self._btn_reset_app["state"] = "normal"
             if self._btn_new_user:   self._btn_new_user["state"] = "normal"
-        else:
+            if hasattr(self, "_btn_users_overview") and self._btn_users_overview:
+                self._btn_users_overview["state"] = "normal"
+        elif self.mode == "user":
             title = f"Password Manager 🔐 — {self.current_user.username} ({self.current_user.role})"
-            # userul poate vedea/adăuga parole,
-            # dar NU poate reseta app, NU poate crea useri,
-            # NU poate face audit global, NU poate seta FaceID,
-            # NU poate actualiza sau șterge intrări
             if self._btn_set_face:   self._btn_set_face["state"] = "disabled"
-            if self._btn_update:     self._btn_update["state"] = "disabled"
-            if self._btn_delete:     self._btn_delete["state"] = "disabled"
+            if self._btn_update:     self._btn_update["state"] = "normal"
+            if self._btn_delete:     self._btn_delete["state"] = "normal"
             if self._btn_audit:      self._btn_audit["state"] = "disabled"
             if self._btn_reset_app:  self._btn_reset_app["state"] = "disabled"
             if self._btn_new_user:   self._btn_new_user["state"] = "disabled"
-
+            if hasattr(self, "_btn_users_overview") and self._btn_users_overview:
+                self._btn_users_overview["state"] = "disabled"
+        else:
+            title = "Password Manager 🔐"
         self.title(title)
 
     def setup_face_auth(self):
+        if self.mode != "master":
+            messagebox.showwarning("FaceID", "FaceID poate fi setat doar pentru master.")
+            return
+
         if not messagebox.askyesno(
-                "Setare FaceID",
-                "Aceasta va porni camera si va salva un model al fetei tale pe disk.\n"
-                "Vrei sa continui?"
+            "Setare FaceID",
+            "Aceasta va porni camera și va salva un model al feței tale pe disk.\n"
+            "Vrei să continui?"
         ):
             return
 
         ok = self.face_auth.enroll()
         if ok:
-            messagebox.showinfo("Setare FaceID", "Enrolarea faciala a reusit.")
+            messagebox.showinfo("Setare FaceID", "Enrolarea facială a reușit.")
         else:
-            messagebox.showwarning(
-                "Setare FaceID",
-                "Enrolarea faciala NU a reusit sau a fost anulata."
-            )
+            messagebox.showwarning("Setare FaceID", "Enrolarea facială NU a reușit sau a fost anulată.")
 
     def user_login_dialog(self):
-        """Login ca user normal (după ce master a deblocat aplicația)."""
-        if self.enc is None:
-            messagebox.showerror("Eroare", "Întâi trebuie deblocat cu master password.")
+        """
+        Butonul din toolbar:
+        - dacă ești în master, trece în modul user (te loghează ca acel user)
+        - dacă ești deja user, te lasă să schimbi userul.
+        """
+        ok = self._user_login_flow(startup=False)
+        if not ok:
             return
-
-        username = simpledialog.askstring("Login user", "Username:", parent=self)
-        if not username:
-            return
-        password = simpledialog.askstring("Login user", "Parolă:", show="*", parent=self)
-        if password is None:
-            return
-
-        user = self.db.verify_user_credentials(username, password)
-        if not user:
-            messagebox.showerror("Eroare", "Credentiale user incorecte.")
-            return
-
-        self.current_user = user
-        self.update_ui_for_role()
-        self.refresh()
-        messagebox.showinfo("Login user", f"Logat ca {user.username} ({user.role}).")
 
     def create_user_dialog(self):
         """Creează un user nou (doar din modul master)."""
-        if self.current_user is not None:
+        if self.mode != "master" or self.master_key is None:
             messagebox.showwarning("Acces restricționat", "Doar master poate crea utilizatori.")
             return
 
@@ -490,25 +555,67 @@ class App(tk.Tk):
             messagebox.showwarning("Atenție", "Parolele nu coincid.")
             return
 
-        # pentru început, toți userii creați sunt 'user' (nu 'master')
         try:
-            user_id = self.db.create_user(username, pw1, role="user")
+            user_id = self.db.create_user(
+                username,
+                pw1,
+                role="user",
+                master_fernet_key=self.master_key
+            )
         except Exception as ex:
             messagebox.showerror("Eroare", f"Nu am putut crea userul:\n{ex}")
             return
 
         messagebox.showinfo("User creat", f"Userul '{username}' a fost creat cu id {user_id}.")
 
+    # ---------- Crypto Helpers -------------------------------------
+
+    def _get_entry_encryption_manager(self, entry_id: int) -> EncryptionManager | None:
+        """
+        Returnează EncryptionManager corespunzător pentru intrarea dată:
+        - user mode  -> self.user_enc
+        - master mode -> derivează DEK_user pentru owner-ul intrării
+        """
+        if self.mode == "user":
+            return self.user_enc
+
+        if self.mode == "master":
+            if not self.master_key:
+                return None
+            owner_id = self.db.get_entry_owner_id(entry_id)
+            if owner_id is None:
+                return None
+            user = self.db.get_user_by_id(owner_id)
+            if not user:
+                return None
+            dek = self.db.get_user_dek_via_master(user, self.master_key)
+            if not dek:
+                return None
+            return EncryptionManager(raw_key=dek)
+
+        return None
+
+    def _decrypt_entry_password(self, entry: PasswordEntry) -> str | None:
+        enc = self._get_entry_encryption_manager(entry.id)
+        if not enc:
+            return None
+        try:
+            return enc.decrypt(entry.password_encrypted)
+        except Exception:
+            return None
+
     # ---------- HIBP audit -----------------------------------------
 
     def audit_hibp_all(self):
-        """Calculează HIBP pentru toate intrările, în background, cu update live.
-           Master -> toate intrările, user normal -> doar intrările lui (dar butonul e dezactivat la user).
         """
-        if self.enc is None:
+        Calculează HIBP pentru toate intrările vizibile:
+        - master -> toate intrările (ale tuturor userilor)
+        - user   -> doar intrările lui
+        """
+        if self.mode not in ("master", "user"):
             return
 
-        if self.current_user is None:
+        if self.mode == "master":
             rows = self.db.get_all_entries()
         else:
             rows = self.db.get_entries_for_user(self.current_user.id)
@@ -525,29 +632,17 @@ class App(tk.Tk):
 
         def worker():
             for e in rows:
-                # IMPORTANT: inițializăm count la None la fiecare iterație,
-                # deci există mereu, indiferent de excepții.
                 count: int | None = None
-
-                # 1) decriptează
-                try:
-                    pwd = self.enc.decrypt(e.password_encrypted)
-                except Exception:
-                    # dacă nu putem decripta, lăsăm count = None (status „—”)
-                    pass
-                else:
-                    # 2) verifică HIBP
+                pwd = self._decrypt_entry_password(e)
+                if pwd is not None:
                     try:
                         count = pwned_count(pwd)
                     except Exception:
-                        # dacă pică rețeaua / API-ul, lăsăm None
                         count = None
 
-                # 3) salvăm în cache + actualizăm UI pentru rândul curent
                 self._hibp_cache[e.id] = count
                 self.after(0, lambda _id=e.id, _c=count: self._update_hibp_cell(_id, _c))
 
-            # 4) la final, mesaj în status bar
             if hasattr(self, "status"):
                 self.after(0, lambda: self.status.config(text="Audit HIBP terminat."))
 
@@ -556,17 +651,20 @@ class App(tk.Tk):
     # ---------- Refresh + search -----------------------------------
 
     def refresh(self):
-        """Reîncarcă toate intrările din baza de date în tabel."""
         if not hasattr(self, "_hibp_cache"):
             self._hibp_cache: dict[int, int | None] = {}
 
         self.tree.delete(*self.tree.get_children())
 
-        # master vede toate intrările, userul vede doar intrările lui
-        if self.current_user is None:
+        if self.mode == "master":
             rows = self.db.get_all_entries()
-        else:
+            who = "master"
+        elif self.mode == "user" and self.current_user is not None:
             rows = self.db.get_entries_for_user(self.current_user.id)
+            who = self.current_user.username
+        else:
+            rows = []
+            who = "-"
 
         for e in rows:
             hibp_val = self._hibp_label(self._hibp_cache.get(e.id))
@@ -577,29 +675,30 @@ class App(tk.Tk):
                 values=(e.service, e.username, e.last_updated, hibp_val),
             )
 
-        who = "master" if self.current_user is None else self.current_user.username
-        self.status.config(text=f"{len(rows)} intrări (user: {who})")
+        self.status.config(text=f"{len(rows)} intrări (mod: {self.mode or '-'}, user: {who})")
 
     def search(self):
-        """Caută după text în service și afișează rezultatele."""
         q = self.search_var.get().strip()
         if not hasattr(self, "_hibp_cache"):
             self._hibp_cache: dict[int, int | None] = {}
 
         self.tree.delete(*self.tree.get_children())
 
-        if self.current_user is None:
-            # master caută în toate
+        if self.mode == "master":
             if not q:
                 rows = self.db.get_all_entries()
             else:
                 rows = self.db.find_by_service(q)
-        else:
-            # user normal caută doar în parolele lui
+            who = "master"
+        elif self.mode == "user" and self.current_user is not None:
             if not q:
                 rows = self.db.get_entries_for_user(self.current_user.id)
             else:
                 rows = self.db.find_by_service_for_user(q, self.current_user.id)
+            who = self.current_user.username
+        else:
+            rows = []
+            who = "-"
 
         for e in rows:
             hibp_val = self._hibp_label(self._hibp_cache.get(e.id))
@@ -610,11 +709,10 @@ class App(tk.Tk):
                 values=(e.service, e.username, e.last_updated, hibp_val),
             )
 
-        who = "master" if self.current_user is None else self.current_user.username
         if q:
-            self.status.config(text=f"{len(rows)} rezultate pentru '{q}' (user: {who})")
+            self.status.config(text=f"{len(rows)} rezultate pentru '{q}' (mod: {self.mode or '-'}, user: {who})")
         else:
-            self.status.config(text=f"{len(rows)} intrări (user: {who})")
+            self.status.config(text=f"{len(rows)} intrări (mod: {self.mode or '-'}, user: {who})")
 
     def get_selected_id(self) -> int | None:
         sel = self.tree.selection()
@@ -626,10 +724,12 @@ class App(tk.Tk):
             return None
 
     # ---------- Actions --------------------------------------------
+
     def add_entry(self):
-        if self.enc is None:
-            messagebox.showerror("Eroare", "Nu ești autentificat.")
+        if self.mode != "user" or self.user_enc is None or self.current_user is None:
+            messagebox.showerror("Eroare", "Poți adăuga parole doar când ești logat ca un user normal.")
             return
+
         service = simpledialog.askstring("Adaugă", "Serviciu (ex: gmail.com):", parent=self)
         if not service:
             return
@@ -643,29 +743,29 @@ class App(tk.Tk):
         if pw1 != pw2:
             messagebox.showwarning("Atenție", "Parolele nu coincid.")
             return
+
         try:
             cnt = pwned_count(pw1)
         except Exception:
-            cnt = None  # rețea căzută etc.
+            cnt = None
 
         if cnt is None:
             messagebox.showwarning("HIBP", "Nu am putut verifica HIBP acum (rețea sau limită).")
         elif cnt > 0:
             if not messagebox.askyesno(
-                    "Parolă compromisă",
-                    f"Această parolă apare în breșe publice de {cnt} ori.\n"
-                    f"Recomand schimbarea ei. Vrei totuși să continui?"
+                "Parolă compromisă",
+                f"Această parolă apare în breșe publice de {cnt} ori.\n"
+                f"Recomand schimbarea ei. Vrei totuși să continui?"
             ):
                 return
-        else:  # cnt == 0
+        else:
             messagebox.showinfo("HIBP", "Parola NU apare în breșe publice (HIBP).")
 
         notes = simpledialog.askstring("Adaugă", "Note (opțional):", parent=self) or ""
 
-        enc_pw = self.enc.encrypt(pw1)
+        enc_pw = self.user_enc.encrypt(pw1)
         entry = PasswordEntry(service, username, enc_pw, notes)
-        user_id = self.current_user.id if self.current_user is not None else None
-        new_id = self.db.add_entry(entry, user_id=user_id)
+        new_id = self.db.add_entry(entry, user_id=self.current_user.id)
 
         def _one_check(eid=new_id, plain=pw1):
             try:
@@ -681,26 +781,25 @@ class App(tk.Tk):
         messagebox.showinfo("Succes", f"Intrare creată cu ID {new_id}")
 
     def show_selected(self):
-        if self.enc is None:
+        if self.mode not in ("master", "user"):
             return
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showinfo("Info", "Selectează o intrare din listă.")
             return
+
         e = self.db.get_entry_by_id(entry_id)
         if not e:
             messagebox.showerror("Eroare", "Intrarea nu mai există.")
             self.refresh()
             return
 
-        try:
-            pwd = self.enc.decrypt(e.password_encrypted)
-        except Exception as ex:
-            messagebox.showerror("Eroare", f"Nu pot decripta (cheie greșită/date corupte).\n{ex}")
+        pwd = self._decrypt_entry_password(e)
+        if pwd is None:
+            messagebox.showerror("Eroare", "Nu pot decripta parola pentru această intrare.")
             return
 
         masked = self.mask_password(pwd)
-        # Afișăm doar mascat + oferim Copy (fără să arătăm plaintext)
         txt = (
             f"Service : {e.service}\n"
             f"Username: {e.username}\n"
@@ -712,8 +811,7 @@ class App(tk.Tk):
             self.secure_copy(pwd, seconds=15)
 
     def reveal_selected(self):
-        """Afișează parola în clar într-o fereastră care se închide automat după 10s."""
-        if self.enc is None:
+        if self.mode not in ("master", "user"):
             return
         entry_id = self.get_selected_id()
         if entry_id is None:
@@ -725,10 +823,9 @@ class App(tk.Tk):
             self.refresh()
             return
 
-        try:
-            pwd = self.enc.decrypt(e.password_encrypted)
-        except Exception as ex:
-            messagebox.showerror("Eroare", f"Nu pot decripta parola.\n{ex}")
+        pwd = self._decrypt_entry_password(e)
+        if pwd is None:
+            messagebox.showerror("Eroare", "Nu pot decripta parola pentru această intrare.")
             return
 
         top = tk.Toplevel(self)
@@ -742,11 +839,9 @@ class App(tk.Tk):
         ttk.Label(container, text=f"{e.service} — {e.username}",
                   font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 8))
 
-        # afișează parola în clar (monospace ca să fie lizibilă)
         show_lbl = ttk.Label(container, text=pwd, font=("Courier New", 12))
         show_lbl.pack(anchor="w", pady=(0, 8))
 
-        # Copy + countdown
         btn_row = ttk.Frame(container)
         btn_row.pack(fill="x")
 
@@ -759,7 +854,6 @@ class App(tk.Tk):
         countdown_lbl = ttk.Label(btn_row, text="Se închide în 10s")
         countdown_lbl.pack(side="right")
 
-        # countdown + auto close la 10s
         seconds = 10
 
         def tick():
@@ -775,17 +869,26 @@ class App(tk.Tk):
         top.after(1000, tick)
 
     def update_selected(self):
-        if self.enc is None:
+        if self.mode != "user" or self.user_enc is None or self.current_user is None:
+            messagebox.showerror("Eroare", "Actualizarea parolelor se face doar în modul user.")
             return
+
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showinfo("Info", "Selectează o intrare.")
             return
+
+        owner_id = self.db.get_entry_owner_id(entry_id)
+        if owner_id != self.current_user.id:
+            messagebox.showerror("Eroare", "Nu poți modifica o parolă care nu îți aparține.")
+            return
+
         e = self.db.get_entry_by_id(entry_id)
         if not e:
             messagebox.showerror("Eroare", "Intrarea nu mai există.")
             self.refresh()
             return
+
         new1 = simpledialog.askstring("Actualizează", "Parolă nouă:", parent=self, show="*")
         if not new1:
             return
@@ -793,26 +896,29 @@ class App(tk.Tk):
         if new1 != new2:
             messagebox.showwarning("Atenție", "Parolele nu coincid.")
             return
-        enc_new = self.enc.encrypt(new1)
+
+        enc_new = self.user_enc.encrypt(new1)
         self.db.update_entry_password(entry_id, enc_new)
         self.refresh()
         messagebox.showinfo("Succes", "Parola a fost actualizată.")
 
     def check_selected(self):
-        if self.enc is None:
+        if self.mode not in ("master", "user"):
             return
+
         entry_id = self.get_selected_id()
         if entry_id is None:
             messagebox.showinfo("Info", "Selectează o intrare.")
             return
+
         e = self.db.get_entry_by_id(entry_id)
         if not e:
             self.refresh()
             return
-        try:
-            pwd = self.enc.decrypt(e.password_encrypted)
-        except Exception as ex:
-            messagebox.showerror("Eroare", f"Nu pot decripta parola pentru verificare.\n{ex}")
+
+        pwd = self._decrypt_entry_password(e)
+        if pwd is None:
+            messagebox.showerror("Eroare", "Nu pot decripta parola pentru verificare.")
             return
 
         try:
@@ -820,8 +926,12 @@ class App(tk.Tk):
         except Exception as ex:
             messagebox.showwarning("HIBP", f"Nu am putut verifica: {ex}")
             return
+
+        if not hasattr(self, "_hibp_cache"):
+            self._hibp_cache: dict[int, int | None] = {}
         self._hibp_cache[e.id] = cnt
         self._update_hibp_cell(e.id, cnt)
+
         if cnt > 0:
             messagebox.showwarning(
                 "HIBP",
@@ -836,8 +946,16 @@ class App(tk.Tk):
         if entry_id is None:
             messagebox.showinfo("Info", "Selectează o intrare.")
             return
+
+        if self.mode == "user":
+            owner_id = self.db.get_entry_owner_id(entry_id)
+            if owner_id != self.current_user.id:
+                messagebox.showerror("Eroare", "Nu poți șterge o parolă care nu îți aparține.")
+                return
+
         if not messagebox.askyesno("Confirmare", "Ștergi intrarea selectată?"):
             return
+
         ok = self.db.delete_entry(entry_id)
         self.refresh()
         if ok:
@@ -847,42 +965,63 @@ class App(tk.Tk):
 
     def reset_app(self):
         if not messagebox.askyesno(
-            "Reset aplicație",
-            "Atenție: se vor șterge toate parolele și se va reseta master password.\nContinui?"
+                "Reset aplicație",
+                "Atenție: se vor șterge TOȚI userii, toate parolele,\n"
+                "se va reseta master password și se vor șterge modelele FaceID.\n"
+                "Continui?"
         ):
             return
+
+        # 1) baza de date (useri + parole)
         try:
             self.db.reset_database()
         except Exception as e:
-            messagebox.showerror("Eroare DB", str(e))
+            messagebox.showerror("Eroare DB", f"Eroare la resetarea bazei de date:\n{e}")
             return
+
+        # 2) auth master (fișierul cu hash-ul parolei master)
         try:
             self.auth.reset_master_password()
         except Exception as e:
             messagebox.showwarning("Avertisment", f"Nu am putut reseta complet auth: {e}")
-            # fallback manual
             try:
                 if os.path.exists("data/auth.json"):
                     os.remove("data/auth.json")
             except Exception:
                 pass
+
+        # 3) FaceID / model facial
+        try:
+            # dacă FaceAuthManager are o metodă reset, o folosim
+            if hasattr(self.face_auth, "reset"):
+                self.face_auth.reset()
+            else:
+                # fallback: dacă există vreo cale de fișier în obiect, încercăm s-o ștergem
+                for attr in ("template_path", "model_path", "db_path", "MODEL_PATH"):
+                    path = getattr(self.face_auth, attr, None)
+                    if path:
+                        try:
+                            os.remove(str(path))
+                        except FileNotFoundError:
+                            pass
+        except Exception:
+            # nu blocăm resetul aplicației dacă ceva nu merge aici
+            pass
+
         messagebox.showinfo("Reset", "Reset complet. Aplicația se va reloga.")
         self.logout()
 
     # -------- Password helpers --------
     def mask_password(self, pwd: str) -> str:
-        # arată aceeași lungime, dar mascat (bullet)
         return "•" * len(pwd)
 
     def secure_copy(self, text: str, seconds: int = 15):
-        """Copiază în clipboard și îl curăță automat după N secunde."""
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
         self.status.config(text=f"Parolă copiată în clipboard ({seconds}s)")
 
         def _clear():
-            # dacă între timp userul a copiat altceva, nu-l ștergem
             try:
                 if self.clipboard_get() == text:
                     self.clipboard_clear()
@@ -891,6 +1030,13 @@ class App(tk.Tk):
                 pass
             self.status.config(text="Clipboard curățat.")
         self.after(seconds * 1000, _clear)
+
+    def show_users_overview(self):
+        """Disponibil doar pentru master: listă useri + parolele lor."""
+        if self.mode != "master" or self.master_key is None:
+            messagebox.showwarning("Acces restricționat", "Trebuie să fii logat ca MASTER.")
+            return
+        UsersOverviewWindow(self)
 
 
 if __name__ == "__main__":
