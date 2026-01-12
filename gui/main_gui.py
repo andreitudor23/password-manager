@@ -5,6 +5,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import threading
 
+# Feature flags
+FACE_ID_ENABLED = False  # set True to re-enable FaceID
+
 from modules.api_check import pwned_count
 from modules.face_auth import FaceAuthManager
 
@@ -244,7 +247,7 @@ class App(tk.Tk):
         # back-end
         self.auth = AuthManager()
         self.db = DatabaseManager()
-        self.face_auth = FaceAuthManager()
+        self.face_auth = FaceAuthManager() if FACE_ID_ENABLED else None
 
         # crypto state
         self.master_key: bytes | None = None          # cheia Fernet derivată din master
@@ -306,6 +309,10 @@ class App(tk.Tk):
         tb.add(btn_reveal)
 
         self._btn_set_face = ttk.Button(tb.inner, text="Setează FaceID (master)", command=self.setup_face_auth)
+        # Dacă FaceID e dezactivat, lăsăm butonul vizibil dar dezactivat (ca să fie clar în demo)
+        if not FACE_ID_ENABLED:
+            self._btn_set_face["state"] = "disabled"
+            self._btn_set_face.configure(text="FaceID dezactivat")
         tb.add(self._btn_set_face)
 
         self._btn_update = ttk.Button(tb.inner, text="Actualizează", command=self.update_selected)
@@ -398,8 +405,8 @@ class App(tk.Tk):
         master_enc = EncryptionManager(master_password=dlg.password)
         self.master_key = master_enc.key
 
-        # verificare facială (doar pentru master)
-        if self.face_auth.is_enrolled():
+        # verificare facială (doar pentru master) – poate fi dezactivată din flag
+        if FACE_ID_ENABLED and self.face_auth is not None and self.face_auth.is_enrolled():
             ok_face = self.face_auth.verify()
             if not ok_face:
                 messagebox.showerror(
@@ -488,7 +495,8 @@ class App(tk.Tk):
         """
         if self.mode == "master":
             title = "Password Manager 🔐 — MASTER"
-            if self._btn_set_face:   self._btn_set_face["state"] = "normal"
+            if self._btn_set_face:
+                self._btn_set_face["state"] = "normal" if FACE_ID_ENABLED else "disabled"
             if self._btn_update:     self._btn_update["state"] = "disabled"
             if self._btn_delete:     self._btn_delete["state"] = "normal"
             if self._btn_audit:      self._btn_audit["state"] = "normal"
@@ -511,6 +519,9 @@ class App(tk.Tk):
         self.title(title)
 
     def setup_face_auth(self):
+        if not FACE_ID_ENABLED or self.face_auth is None:
+            messagebox.showinfo("FaceID", "Funcția FaceID este dezactivată temporar.")
+            return
         if self.mode != "master":
             messagebox.showwarning("FaceID", "FaceID poate fi setat doar pentru master.")
             return
@@ -990,20 +1001,21 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-        # 3) FaceID / model facial
+        # 3) FaceID / model facial (opțional)
         try:
-            # dacă FaceAuthManager are o metodă reset, o folosim
-            if hasattr(self.face_auth, "reset"):
-                self.face_auth.reset()
-            else:
-                # fallback: dacă există vreo cale de fișier în obiect, încercăm s-o ștergem
-                for attr in ("template_path", "model_path", "db_path", "MODEL_PATH"):
-                    path = getattr(self.face_auth, attr, None)
-                    if path:
-                        try:
-                            os.remove(str(path))
-                        except FileNotFoundError:
-                            pass
+            if self.face_auth is not None:
+                # dacă FaceAuthManager are o metodă reset, o folosim
+                if hasattr(self.face_auth, "reset"):
+                    self.face_auth.reset()
+                else:
+                    # fallback: dacă există vreo cale de fișier în obiect, încercăm s-o ștergem
+                    for attr in ("template_path", "model_path", "db_path", "MODEL_PATH"):
+                        path = getattr(self.face_auth, attr, None)
+                        if path:
+                            try:
+                                os.remove(str(path))
+                            except FileNotFoundError:
+                                pass
         except Exception:
             # nu blocăm resetul aplicației dacă ceva nu merge aici
             pass
