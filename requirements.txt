@@ -1,1 +1,6 @@
-This is the req text file for this project
+cryptography==42.0.5
+requests==2.31.0
+pwinput==1.0.3
+customtkinter==5.2.2
+opencv-contrib-python==4.12.0.88
+numpy==2.2.6
